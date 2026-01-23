@@ -19,12 +19,12 @@ for decade in $decades
 do
     cdo sellonlatbox,${lonmin},${lonmax},${latmin},${latmax} \
         -monmean \
-        ${model}_r1i1p1f1_w5e5_${scenario}_${variable}_global_daily_${decade}.nc \
-        ${model}_r1i1p1f1_w5e5_${scenario}_${variable}_${region}_monthly_${decade}.nc
+        data/raw/${model}_w5e5_${scenario}_${variable}_global_daily_${decade}.nc \
+        ${model}_w5e5_${scenario}_${variable}_${region}_monthly_${decade}.nc
 done
  
-cdo mergetime ${model}_r1i1p1f1_w5e5_${scenario}_${variable}_${region}_monthly_*.nc \
-    ${model}_r1i1p1f1_w5e5_${scenario}_${variable}_${region}_monthly.nc
+cdo mergetime ${model}_w5e5_${scenario}_${variable}_${region}_monthly_*.nc \
+    data/processed/${model}_w5e5_${scenario}_${variable}_${region}_monthly.nc
 
 # Clean up intermediate files
-rm ${model}_r1i1p1f1_w5e5_${scenario}_${variable}_${region}_monthly_[0-9]*.nc
+rm ${model}_w5e5_${scenario}_${variable}_${region}_monthly_[0-9]*.nc
