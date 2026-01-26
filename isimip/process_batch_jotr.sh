@@ -4,7 +4,7 @@
 
 region=jotr
 lonmin=-116.555  # west
-lonmax=-115.445  # east
+lonmax=-114.945  # east (extended by ~0.5 degrees to include additional grid cells)
 latmin=33.655    # south
 latmax=34.345    # north
 

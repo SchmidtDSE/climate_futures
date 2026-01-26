@@ -1,0 +1,79 @@
+name: climate_data_pipeline
+channels:
+  - conda-forge
+dependencies:
+  # Core scientific computing
+  - python=3.12
+  - numpy
+  - scipy
+  - pandas
+  - xarray
+  - netcdf4
+  - h5py
+  - zarr
+  
+  # Geospatial
+  - geopandas
+  - rasterio
+  - rioxarray
+  - shapely
+  - pyogrio
+  - cartopy  # NEW: Required for mapping and visualization
+  
+  # Visualization
+  - matplotlib
+  - bokeh
+  - folium
+  - ipywidgets
+  - bqplot
+  - ipydatagrid
+  - pyside6
+  
+  # Distributed computing
+  - dask
+  - dask-gateway
+  - distributed
+  
+  # Climate data specific
+  - cftime
+  - cf_xarray
+  - pint-xarray
+  - xclim
+  - xmip
+  - xgcm
+  - xarrayutils
+  
+  # Data access
+  - intake
+  - intake-esm
+  - intake-xarray
+  - intake-geopandas
+  - s3fs
+  - boto3
+  - aiobotocore
+  
+  # Statistics and ML
+  - scikit-learn
+  - statsmodels
+  - numba
+  
+  # Jupyter
+  - ipykernel
+  - jupyterlab
+  - jupyter_client
+  - ipython
+  
+  # Utilities
+  - pydantic
+  - requests
+  - beautifulsoup4
+  - yaml
+  - snuggs
+  - bottleneck
+  - astropy
+  - timezonefinder
+  - mapclassify
+  - pyarrow
+  - branca
+  - contourpy
+  - patsy
