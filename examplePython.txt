@@ -1,0 +1,399 @@
+import climakitae as ck
+from climakitae.core.data_interface import get_data
+import xarray as xr
+import numpy as np
+import pandas as pd
+import geopandas as gpd
+import rioxarray as rxr
+import warnings
+import os
+import gc # Garbage collector
+
+# --- Configuration ---
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+STANDARD_CRS = "EPSG:4326"  # WGS84
+DOWNSCALING = "Statistical"
+RES = "3 km"
+
+# Variables specific to Statistical downscaling
+# CORRECTION: Updated variable names based on the API feedback
+VARIABLES_STAT = {
+    "T_Max": "Maximum air temperature at 2m",
+    "T_Min": "Minimum air temperature at 2m",
+    "Precip": "Precipitation (total)"
+}
+
+# Corrected list of available scenarios
+SCENARIOS = ["Historical Climate", "SSP 2-4.5", "SSP 3-7.0", "SSP 5-8.5"]
+
+TIMESPAN = (1950, 2100)
+BASELINEPER = (1995, 2014)
+HISENDYEAR = 2014
+SMOOTHINGWindow = 10
+
+outputDataForR = "dataForRScripts"
+outputImages = "OutputImages"
+
+os.makedirs(outputDataForR, exist_ok=True)
+os.makedirs(outputImages, exist_ok=True)
+
+# Define the output filename for incremental saving
+output_filename = os.path.join(outputDataForR, "Statistical_3km_Tavg_Precip_Incremental_Resumable.csv")
+
+# --- Boundary Definitions ---
+# Update paths if necessary
+SHAPEFILES = {
+    "JoshuaTree": "../JoshuaTreeOutlines/JoshuaTree/Joshua_Tree_National_Park.shp",
+    "Mojave": "../Mojave/Mojave_National_Preserve.shp"
+}
+
+BOUNDARIES = {}
+for name, path in SHAPEFILES.items():
+    try:
+        boundary_WGS84 = gpd.read_file(path)
+        if boundary_WGS84.crs is None or str(boundary_WGS84.crs) != STANDARD_CRS:
+            boundary_WGS84 = boundary_WGS84.to_crs(STANDARD_CRS)
+        BOUNDARIES[name] = boundary_WGS84
+        print(f"Loaded {name} boundary.")
+    except Exception as e:
+        print(f"ERROR: Couldn't load {name} bounding file: {e}")
+        BOUNDARIES[name] = None
+
+# --- Helper Functions ---
+
+def preprocess_data(dataArray, varKey):
+    """Converts units and ensures CRS/Spatial Dims are set correctly."""
+    if dataArray is None:
+        return None
+    
+    # Unit conversions
+    if 'T_' in varKey and dataArray.attrs.get('units') == 'K':
+        dataArray = dataArray - 273.15
+        dataArray.attrs['units'] = '°C'
+        
+    if varKey == 'Precip' and dataArray.attrs.get('units') in ['kg/m^2/s', 'kg m-2 s-1']:
+        # Convert flux (mm/s) to accumulation (mm/month)
+        days_in_month = dataArray.time.dt.days_in_month
+        seconds_per_day = 86400
+        dataArray = (dataArray * seconds_per_day) * days_in_month
+        dataArray.attrs['units'] = 'mm/month'
+
+    # Ensure CRS is set (Statistical data is typically WGS84)
+    if dataArray.rio.crs is None:
+        try:
+            dataArray = dataArray.rio.write_crs(STANDARD_CRS)
+        except Exception:
+            pass
+            
+    # Identify and set spatial dimensions explicitly (Crucial fix for the dimension error)
+    y_dim = None
+    x_dim = None
+    
+    # CORRECTION: Robust check for common dimension names (y/x, latitude/longitude, lat/lon)
+    if 'latitude' in dataArray.dims: y_dim = 'latitude'
+    elif 'lat' in dataArray.dims: y_dim = 'lat'
+    elif 'y' in dataArray.dims: y_dim = 'y'
+        
+    if 'longitude' in dataArray.dims: x_dim = 'longitude'
+    elif 'lon' in dataArray.dims: x_dim = 'lon'
+    elif 'x' in dataArray.dims: x_dim = 'x'
+            
+    if y_dim is None or x_dim is None:
+        print(f"  Error: Could not identify spatial dimensions. Dims found: {dataArray.dims}")
+        return None
+
+    try:
+        # Explicitly inform rioxarray about the spatial dimensions
+        dataArray = dataArray.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim)
+    except Exception as e:
+        print(f"  Error setting spatial dims: {e}")
+        return None
+        
+    return dataArray
+
+def mask_and_spatial_average(dataArray, boundaryGDF_WGS84):
+    """Masks data to boundary and calculates area-weighted spatial average."""
+    if dataArray is None:
+        return None
+
+    # 1. Prepare for Masking (Clipping)
+    try:
+        # Drop auxiliary coords that might conflict
+        coordsToDrop = []
+        x_dim = dataArray.rio.x_dim
+        y_dim = dataArray.rio.y_dim
+
+        # Only drop 'lat'/'lon' if they are NOT the primary spatial dimensions but exist as coords
+        if x_dim != 'lon' and 'lon' in dataArray.coords: coordsToDrop.append('lon')
+        if y_dim != 'lat' and 'lat' in dataArray.coords: coordsToDrop.append('lat')
+        
+        dataCleaned = dataArray.drop_vars(coordsToDrop, errors='ignore')
+
+        # Ensure spatial dims are last for rioxarray
+        spatialDims = (y_dim, x_dim)
+        
+        nonSpatialDims = [dim for dim in dataCleaned.dims if dim not in spatialDims]
+        expectedOrder = tuple(nonSpatialDims) + spatialDims
+        if dataCleaned.dims != expectedOrder:
+            dataCleaned = dataCleaned.transpose(*expectedOrder)
+            
+    except Exception as e:
+        print(f"  Error preparing data structure: {e}")
+        return None
+
+    # 2. Masking (Clipping)
+    try:
+        # Ensure boundary CRS matches raster CRS
+        if str(dataCleaned.rio.crs) != str(boundaryGDF_WGS84.crs):
+             boundaryNativeCRS = boundaryGDF_WGS84.to_crs(dataCleaned.rio.crs)
+        else:
+            boundaryNativeCRS = boundaryGDF_WGS84
+
+        maskedData = dataCleaned.rio.clip(
+            boundaryNativeCRS.geometry.values, 
+            drop=False, # Keep dimensions, mask values outside
+            all_touched=True
+        )
+    except Exception as e:
+        print(f"  Error during masking: {e}")
+        return None
+
+    # 3. Spatial Averaging
+    try:
+        # Weighted spatial average (Statistical data is geographic)
+        # Use the Y dimension coordinates for latitude weights
+        latitudes = maskedData[y_dim]
+        weights = np.cos(np.deg2rad(latitudes))
+        weights.name = "weights"
+        
+        try:
+            spatialAVG = maskedData.weighted(weights).mean(dim=[x_dim, y_dim], skipna=True)
+        except Exception as weight_e:
+                print(f"    Weighted average failed: {weight_e}. Using unweighted mean.")
+                spatialAVG = maskedData.mean(dim=[x_dim, y_dim], skipna=True)
+
+        # Load data into memory (trigger Dask computation)
+        spatialAVG.load()
+        
+        if spatialAVG.isnull().all():
+            return None
+            
+        return spatialAVG
+
+    except Exception as e:
+        print(f"    Error in calculating spatial average or loading data: {e}.")
+        return None
+
+def calculate_smoothed_anomalies(spatialAVG, varKey, scenario):
+    """Performs temporal aggregation, anomaly calculation, and smoothing."""
+    if spatialAVG is None:
+        return None
+        
+    # 1. Temporal aggregation (annual means/totals)
+    if varKey == 'Precip':
+        # Annual total precip
+        annualData = spatialAVG.resample(time='YE').sum(dim='time', skipna=True)
+        annualData.attrs['units'] = 'mm/year'
+    else:
+        # Annual mean temperature
+        annualData = spatialAVG.resample(time='YE').mean(dim='time', skipna=True)
+    
+    # 2. Anomaly calculations
+    baselineSlice = annualData.sel(time=slice(str(BASELINEPER[0]), str(BASELINEPER[1])))
+    
+    if baselineSlice.time.size == 0:
+        print("    Warning: No data found for baseline period in this scenario segment.")
+        return None
+
+    # Mean across the baseline years for each simulation individually.
+    baseline_mean = baselineSlice.mean(dim='time')
+    
+    # Calculate anomalies
+    if varKey == 'Precip':
+        # Relative anomalies (percentage change), handle low baseline (1mm/year threshold)
+        # Check if ANY simulation has a low baseline
+        if (np.abs(baseline_mean) < 1.0).any():
+             print("    Note: Baseline precip < 1mm/year detected. Using absolute difference (Δmm/year).")
+             anomalies = (annualData - baseline_mean)
+        else:
+            anomalies = ((annualData - baseline_mean) / baseline_mean) * 100
+    else:
+        # Absolute anomalies for temperature
+        anomalies = (annualData - baseline_mean)
+
+    # 3. Smoothing (Decadal Mean)
+    smoothed_anomalies = anomalies.rolling(time=SMOOTHINGWindow, center=True, min_periods=1).mean()
+    
+    # 4. Convert to DataFrame for export
+    sdf = smoothed_anomalies.to_dataframe(name='Anomaly').reset_index()
+    sdf['Variable'] = varKey
+    sdf['Year'] = sdf['time'].dt.year
+    
+    # 'DataScenario': The scenario the data originated from (for tracking progress and R plotting)
+    sdf['DataScenario'] = scenario
+    
+    # 'Scenario': The scenario label for plotting (Historical vs Future SSP)
+    if scenario == "Historical Climate":
+            sdf['Scenario'] = "Historical Climate"
+    else:
+        # For SSPs, label the historical period (<= HISENDYEAR) as "Historical Climate"
+        sdf['Scenario'] = np.where(
+            sdf['Year'] <= HISENDYEAR,
+            "Historical Climate",
+            scenario
+        )
+    
+    # Identify the simulation identifier (handle 'source_id' or 'simulation' if present)
+    if 'simulation' in sdf.columns:
+        sdf = sdf.rename(columns={'simulation': 'Simulation'})
+    elif 'source_id' in sdf.columns:
+            sdf = sdf.rename(columns={'source_id': 'Simulation'})
+    else:
+            # Handle cases where the dimension might have been dropped if only one simulation existed
+            if 'simulation' in spatialAVG.coords:
+                 sdf['Simulation'] = str(spatialAVG.simulation.values.item())
+            elif 'source_id' in spatialAVG.coords:
+                sdf['Simulation'] = str(spatialAVG.source_id.values.item())
+            else:
+                sdf['Simulation'] = "Unknown"
+            
+    return sdf
+
+
+# --- Main Processing Loop (Resumable Incremental) ---
+
+# Define the columns for the CSV
+required_cols = ['Year', 'Region', 'Scenario', 'DataScenario', 'Simulation', 'Variable', 'Anomaly']
+
+# --- Initialize/Load Progress Tracker (Checkpointing) ---
+processed_combinations = set()
+
+if os.path.exists(output_filename):
+    print(f"'{output_filename}' exists. Attempting to resume...")
+    try:
+        # Load existing data to determine what to skip
+        existing_df = pd.read_csv(output_filename, low_memory=False)
+        # Check based on Region and DataScenario (the originating scenario)
+        if 'DataScenario' in existing_df.columns and 'Region' in existing_df.columns:
+             # Create a set of tuples representing processed (Region, DataScenario) combinations
+             processed_combinations = set(zip(existing_df['Region'], existing_df['DataScenario']))
+             print(f"Found {len(processed_combinations)} existing combinations to skip.")
+        else:
+            print("Existing CSV format is missing key columns. Starting fresh.")
+            pd.DataFrame(columns=required_cols).to_csv(output_filename, index=False)
+    except pd.errors.EmptyDataError:
+        print("Existing CSV is empty. Starting fresh.")
+        pd.DataFrame(columns=required_cols).to_csv(output_filename, index=False)
+    except Exception as e:
+        print(f"Error reading existing CSV: {e}. Starting fresh.")
+        pd.DataFrame(columns=required_cols).to_csv(output_filename, index=False)
+else:
+    # Initialize CSV with headers if it doesn't exist
+    pd.DataFrame(columns=required_cols).to_csv(output_filename, index=False)
+
+print("\nStarting data processing...")
+
+for region_name, boundary_gdf in BOUNDARIES.items():
+    if boundary_gdf is None:
+        continue
+        
+    # Define spatial bounds for retrieval optimization
+    bounds = boundary_gdf.total_bounds
+    longitude_slice = (bounds[0], bounds[2])
+    latitude_slice = (bounds[1], bounds[3])
+
+    # Process by scenario to optimize checkpointing
+    for scenario in SCENARIOS:
+        
+        # Check if this combination (Region, Scenario) has already been processed
+        combination_key = (region_name, scenario)
+        if combination_key in processed_combinations:
+            print(f"\n--- Skipping: {region_name} | {scenario} (already in CSV) ---")
+            continue
+            
+        print(f"\n--- Processing: {region_name} | {scenario} ---")
+        
+        # 1. Fetch all necessary data for this scenario/region
+        data_dict = {}
+        for key, varName in VARIABLES_STAT.items():
+            print(f"  Fetching {key} ('{varName}')...")
+            try:
+                data = get_data(
+                    variable=varName,
+                    resolution=RES,
+                    downscaling_method=DOWNSCALING,
+                    timescale="monthly",
+                    scenario=[scenario], # Fetch one scenario at a time for memory management
+                    time_slice=TIMESPAN,
+                    latitude=latitude_slice,
+                    longitude=longitude_slice
+                )
+                
+                if data is None or data.time.size == 0:
+                    # Handle API suggestion messages gracefully if data is None
+                    print(f"    Warning: No data returned for {key}.")
+                    data_dict[key] = None
+                else:
+                    # Apply preprocessing including the spatial dimension fix
+                    data_dict[key] = preprocess_data(data, key)
+                    
+            except Exception as e:
+                print(f"    Error retrieving/preprocessing {key}: {e}")
+                data_dict[key] = None
+
+        # 2. Calculate T_Avg
+        if data_dict.get("T_Max") is not None and data_dict.get("T_Min") is not None:
+            print("  Calculating T_Avg...")
+            # Xarray automatically aligns dimensions (time, space, simulation/source_id)
+            data_dict["T_Avg"] = (data_dict["T_Max"] + data_dict["T_Min"]) / 2
+            data_dict["T_Avg"].attrs = data_dict["T_Max"].attrs # Copy attributes
+        else:
+            print("  Skipping T_Avg due to missing T_Max or T_Min.")
+            data_dict["T_Avg"] = None
+
+        # 3. Process Precip and T_Avg
+        results_to_save = []
+        for var_key in ["T_Avg", "Precip"]:
+            data = data_dict.get(var_key)
+            if data is None:
+                continue
+                
+            print(f"  Processing {var_key} (Masking, Averaging, Anomalies)...")
+            
+            # Spatial processing
+            spatial_avg = mask_and_spatial_average(data, boundary_gdf)
+            
+            # Temporal processing and DataFrame conversion
+            sdf = calculate_smoothed_anomalies(spatial_avg, var_key, scenario)
+            
+            if sdf is not None:
+                sdf['Region'] = region_name
+                results_to_save.append(sdf)
+
+        # 4. Incremental Save
+        if results_to_save:
+            scenario_df = pd.concat(results_to_save)
+            
+            # Clean up columns
+            cols_to_export = [col for col in required_cols if col in scenario_df.columns]
+            final_export_df = scenario_df[cols_to_export].dropna(subset=['Anomaly'])
+
+            # Append to CSV (mode='a', header=False because headers are pre-initialized)
+            final_export_df.to_csv(output_filename, mode='a', header=False, index=False)
+            
+            print(f"  SUCCESS: Appended results to CSV. Rows added: {len(final_export_df)}")
+            processed_combinations.add(combination_key) # Mark as done
+        else:
+            print(f"  FAIL: No results generated for this region/scenario.")
+            
+        # Clean up memory explicitly to prevent kernel crash
+        if 'data_dict' in locals():
+            del data_dict
+        if 'results_to_save' in locals():
+            del results_to_save
+        gc.collect()
+
+print(f"\nProcessing finished.")
+print(f"Data saved to: {output_filename}")

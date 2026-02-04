@@ -1,0 +1,14 @@
+name: r-env
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - r-base>=4.3
+  - r-tidyverse
+  - r-irkernel
+  - r-sf
+  - r-ggplot2
+  - r-readr
+  - r-dplyr
+  - r-viridis
+  - r-scales

@@ -1,0 +1,191 @@
+CLIMAKITAE QUICK REFERENCE
+==========================
+Version: 1.4.0
+Source: https://github.com/cal-adapt/climakitae
+Docs: https://climakitae.readthedocs.io/en/latest/
+
+Note: Official docs are sparse. This reference is compiled from source code,
+existing notebooks, and API exploration. Point Claude at this file for context.
+
+
+1. CORE DATA RETRIEVAL
+======================
+
+    from climakitae.core.data_interface import get_data
+
+    data = get_data(
+        variable       = "Maximum air temperature at 2m",
+        resolution     = "3 km",
+        downscaling_method = "Statistical",
+        timescale      = "monthly",
+        scenario       = ["Historical Climate"],   # list of scenario strings
+        time_slice     = (1950, 2100),              # (start_year, end_year)
+        latitude       = (33.0, 36.0),              # (south, north) bounds
+        longitude      = (-117.0, -115.0)           # (west, east) bounds
+    )
+
+    Returns: xarray.DataArray (lazy/dask-backed)
+
+
+2. VARIABLE NAMES (Statistical Downscaling, 3 km)
+==================================================
+Use these EXACT strings as the `variable` parameter:
+
+    "Maximum air temperature at 2m"
+    "Minimum air temperature at 2m"
+    "Precipitation (total)"
+
+To discover available variables programmatically:
+    import climakitae as ck
+    sel = ck.Select()
+    # sel.variable  shows available options after setting other params
+
+
+3. SCENARIO NAMES
+=================
+Use these EXACT strings:
+
+    "Historical Climate"     # ~1950-2014
+    "SSP 2-4.5"              # medium emissions
+    "SSP 3-7.0"              # high emissions
+    "SSP 5-8.5"              # very high emissions
+
+Pass as a list: scenario=["SSP 2-4.5", "SSP 3-7.0"]
+
+
+4. RESOLUTION OPTIONS
+=====================
+    "3 km"       — Statistical downscaling (LOCA2)
+    "9 km"       — Dynamical downscaling (WRF)
+    "45 km"      — Global model resolution
+
+
+5. DOWNSCALING METHODS
+======================
+    "Statistical"   — LOCA2 method, 3 km grid
+    "Dynamical"     — WRF model, 9 km grid
+    "Global Models" — Raw GCM output, ~45 km
+
+
+6. TIMESCALE OPTIONS
+====================
+    "monthly"
+    "daily"
+    "hourly"   (availability depends on variable/method)
+
+
+7. KEY UTILITY FUNCTIONS
+========================
+
+    import climakitae as ck
+
+    # Export data
+    ck.export(data, filename="mydata", format="CSV")     # also "NetCDF", "Zarr"
+
+    # Load lazy data into memory
+    ck.load(data, progress_bar=True)
+
+    # Interactive selection widget (for Jupyter)
+    sel = ck.Select()
+    sel.show()           # displays interactive parameter picker
+
+
+8. DATA STRUCTURE NOTES
+=======================
+- get_data() returns xarray.DataArray backed by dask (lazy evaluation)
+- Dimensions typically: (time, simulation/source_id, latitude/y, longitude/x)
+- Spatial coords may be named: latitude/longitude OR lat/lon OR y/x
+- Always check with: data.dims, data.coords
+- CRS is typically EPSG:4326 (WGS84) for Statistical data
+- Use rioxarray for spatial operations:
+    import rioxarray
+    data = data.rio.write_crs("EPSG:4326")
+    data = data.rio.set_spatial_dims(x_dim="longitude", y_dim="latitude")
+
+
+9. COMMON PATTERNS
+==================
+
+# Spatial subsetting with shapefile
+import geopandas as gpd
+boundary = gpd.read_file("park.shp").to_crs("EPSG:4326")
+bounds = boundary.total_bounds  # [minx, miny, maxx, maxy]
+data = get_data(..., latitude=(bounds[1], bounds[3]), longitude=(bounds[0], bounds[2]))
+
+# Clipping to exact boundary
+clipped = data.rio.clip(boundary.geometry.values, all_touched=True)
+
+# Area-weighted spatial mean
+import numpy as np
+weights = np.cos(np.deg2rad(data.latitude))
+spatial_mean = data.weighted(weights).mean(dim=["longitude", "latitude"])
+
+# Trigger computation (load from dask into memory)
+spatial_mean.load()
+
+
+10. GOTCHAS
+===========
+- Variable names must match EXACTLY (case-sensitive, including parentheses)
+- get_data() returns None if parameters don't match available data
+- SSP scenarios include historical overlap: SSP data often starts from ~1950,
+  with 1950-2014 being the historical portion. Label accordingly.
+- Memory: Each get_data() call returns lazy data. Call .load() only after
+  spatial subsetting to avoid loading full grids.
+- Precipitation units: raw data is in kg/m^2/s (flux). Convert to mm/month:
+    mm_per_month = data * 86400 * days_in_month
+- Temperature units: may be in Kelvin. Convert: celsius = data - 273.15
+- The `simulation` or `source_id` dimension contains individual GCM runs.
+  Multiple simulations per scenario is normal.
+- THREAD SAFETY: get_data() is NOT thread-safe! It creates DataParameters
+  objects internally that fetch boundary data from S3. Concurrent calls
+  cause race conditions (AttributeError: 'NoneType' has no attribute 'query').
+  Solution: call get_data() sequentially, then parallelize .load() calls
+  in ThreadPoolExecutor to overlap the ~90s network I/O per variable.
+
+
+11. SPATIAL SUBSETTING PARAMETERS (from official docs)
+=======================================================
+
+    # Option 1: Manual lat/lon bounding box (default)
+    data = get_data(..., latitude=(33.0, 36.0), longitude=(-117.0, -115.0))
+
+    # Option 2: Server-side named-area subsetting
+    data = get_data(..., area_subset="CA counties",
+                         cached_area=["San Bernardino County"])
+
+    # Option 3: Server-side area average (returns pre-averaged scalar per timestep)
+    data = get_data(..., area_subset="CA counties",
+                         cached_area=["San Bernardino County"],
+                         area_average="Yes")
+
+Valid area_subset categories:
+    "none"                      — entire domain (default)
+    "CA counties"               — California counties
+    "CA watersheds"             — Watershed boundaries
+    "CA utilities"              — IOUs and POUs
+    "CA forecast zones"         — Electricity demand forecast zones
+    "CA electric balancing areas"
+    "US states"                 — US state boundaries
+
+cached_area takes a list of feature names within the chosen category.
+    e.g. cached_area=["San Bernardino County", "Riverside County"]
+
+area_average: "Yes" or "No" (default "No")
+    If "Yes", server returns a spatial average over the area — dramatically
+    less data to transfer. BUT: this is a simple area average, NOT a
+    cosine-latitude-weighted average, and NOT clipped to a custom polygon
+    (e.g. national park boundary). Use only if the named area matches your
+    study region closely enough.
+
+all_touched: bool (default False)
+    Passed through to rasterio masking. If True, all pixels touched by
+    the boundary polygon are included (vs only those whose center is inside).
+
+
+12. CAL-ADAPT ANALYTICS ENGINE
+==============================
+Data source: https://cal-adapt.org
+Backend: Zarr stores on cloud storage
+No API key required for public data access
+Data covers California at various resolutions
