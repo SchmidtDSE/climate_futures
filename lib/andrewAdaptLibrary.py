@@ -91,11 +91,124 @@ DEFAULT_TIMESPAN = (1950, 2100)
 DEFAULT_SMOOTHING_WINDOW = 10
 HISTORICAL_END_YEAR = 2014
 
+# Temporal resolution mapping (user-friendly -> table_id)
+# Note: Hourly data (1hr) is only available for WRF, not LOCA2
+TIMESCALE_MAP = {
+    "monthly": "mon",
+    "daily": "day",
+    "yearly": "yrmax",
+    # Also allow raw table_id values
+    "mon": "mon",
+    "day": "day",
+    "yrmax": "yrmax",
+}
+
+# Documentation of what each timescale means and how it's aggregated
+# Based on standard CMIP6/LOCA2 conventions
+TIMESCALE_INFO = {
+    "monthly": {
+        "table_id": "mon",
+        "description": "Monthly aggregated values",
+        "aggregation": {
+            "temperature": "Monthly mean of daily values",
+            "precipitation": "Monthly sum of daily values (mm/month)",
+            "humidity": "Monthly mean of daily values",
+            "wind": "Monthly mean of daily values",
+            "radiation": "Monthly mean of daily values",
+        },
+        "variables_available": 10,  # All LOCA2 variables
+    },
+    "daily": {
+        "table_id": "day",
+        "description": "Daily values (native LOCA2 resolution)",
+        "aggregation": {
+            "tasmax": "Daily maximum temperature",
+            "tasmin": "Daily minimum temperature",
+            "pr": "Daily total precipitation",
+            "humidity/wind/radiation": "Daily mean values",
+        },
+        "variables_available": 10,  # All LOCA2 variables
+        "note": "~30x more data than monthly. Use for extreme event analysis.",
+    },
+    "yearly": {
+        "table_id": "yrmax",
+        "description": "Annual maximum values",
+        "aggregation": {
+            "tasmax": "Maximum daily Tmax in the year (hottest day)",
+        },
+        "variables_available": 1,  # Only tasmax
+        "note": "Only tasmax available. Use for annual extreme heat analysis.",
+    },
+}
+
+# Variables available at each timescale for LOCA2 d03 (3km)
+TIMESCALE_VARIABLES = {
+    "monthly": ["tasmax", "tasmin", "pr", "hursmax", "hursmin", "huss", "rsds", "uas", "vas", "wspeed"],
+    "daily": ["tasmax", "tasmin", "pr", "hursmax", "hursmin", "huss", "rsds", "uas", "vas", "wspeed"],
+    "yearly": ["tasmax"],  # Only annual max temperature
+}
+
 # Standard CSV columns for output
 CSV_COLUMNS = [
     "Year", "Region", "Scenario", "DataScenario",
     "Simulation", "Variable", "Anomaly",
 ]
+
+
+def validate_timescale_variables(variables: list, timescale: str) -> None:
+    """Check that requested variables are available at the given timescale.
+
+    Args:
+        variables: List of variable short names (e.g. ["T_Max", "T_Min", "Precip"])
+        timescale: Temporal resolution ("monthly", "daily", "yearly")
+
+    Raises:
+        ValueError: If any variable is not available at the requested timescale
+    """
+    available = TIMESCALE_VARIABLES.get(timescale, [])
+    if not available:
+        raise ValueError(
+            f"Unknown timescale: {timescale!r}. "
+            f"Options: {list(TIMESCALE_VARIABLES.keys())}"
+        )
+
+    unavailable = []
+    for var_key in variables:
+        var_id = VARIABLE_MAP.get(var_key, {}).get("id", var_key)
+        if var_id not in available:
+            unavailable.append(var_key)
+
+    if unavailable:
+        # Build helpful error message
+        available_friendly = [
+            VARIABLE_MAP_REV.get(v, v) for v in available
+        ]
+        timescale_info = TIMESCALE_INFO.get(timescale, {})
+
+        msg = (
+            f"Variable(s) {unavailable} not available at timescale={timescale!r}.\n"
+            f"Available at {timescale}: {available_friendly}\n"
+        )
+        if timescale == "yearly":
+            msg += (
+                "Note: 'yearly' only has annual maximum temperature (T_Max).\n"
+                "For other variables, use 'monthly' or 'daily'."
+            )
+        raise ValueError(msg)
+
+
+def get_timescale_info(timescale: str = None) -> dict:
+    """Get information about available timescales and their aggregation methods.
+
+    Args:
+        timescale: Specific timescale to get info for, or None for all
+
+    Returns:
+        dict with timescale info including aggregation methods
+    """
+    if timescale is not None:
+        return TIMESCALE_INFO.get(timescale, {})
+    return TIMESCALE_INFO
 
 
 # ===========================================================================
@@ -113,25 +226,48 @@ class CatalogExplorer:
         print(cat.variables())
         print(cat.scenarios())
         print(cat.summary())
+
+        # For daily data:
+        cat_daily = CatalogExplorer(timescale="daily")
     """
 
-    def __init__(self, activity: str = "LOCA2", table: str = "mon",
-                 grid: str = "d03"):
+    def __init__(self, activity: str = "LOCA2", timescale: str = "monthly",
+                 grid: str = "d03", table: str = None):
         """Load and filter the Cal-Adapt catalog CSV from S3.
 
         Args:
             activity: Activity ID filter (default "LOCA2" for statistical downscaling)
-            table: Table ID filter (default "mon" for monthly)
+            timescale: Temporal resolution - "monthly", "daily", "hourly", or "yearly"
+                       (default "monthly")
             grid: Grid label filter (default "d03" for 3km)
+            table: DEPRECATED - use timescale instead. Raw table_id if you must.
         """
+        # Handle deprecated 'table' parameter
+        if table is not None:
+            import warnings
+            warnings.warn(
+                "CatalogExplorer(table=...) is deprecated. Use timescale= instead. "
+                "Options: 'monthly', 'daily', 'hourly', 'yearly'",
+                DeprecationWarning
+            )
+            table_id = table
+        else:
+            table_id = TIMESCALE_MAP.get(timescale)
+            if table_id is None:
+                raise ValueError(
+                    f"Unknown timescale: {timescale!r}. "
+                    f"Options: {list(TIMESCALE_MAP.keys())}"
+                )
+
         self._raw = pd.read_csv(CATALOG_URL)
         self._filtered = self._raw[
             (self._raw.activity_id == activity)
-            & (self._raw.table_id == table)
+            & (self._raw.table_id == table_id)
             & (self._raw.grid_label == grid)
         ].copy()
         self._activity = activity
-        self._table = table
+        self._table = table_id
+        self._timescale = timescale
         self._grid = grid
 
     @property
@@ -272,10 +408,15 @@ class CatalogExplorer:
 
         return {"valid": len(issues) == 0, "issues": issues}
 
+    @property
+    def timescale(self) -> str:
+        """Current temporal resolution setting."""
+        return self._timescale
+
     def __repr__(self) -> str:
         return (
             f"CatalogExplorer(activity={self._activity!r}, "
-            f"table={self._table!r}, grid={self._grid!r}, "
+            f"timescale={self._timescale!r}, grid={self._grid!r}, "
             f"stores={self.catalog_size})"
         )
 
@@ -705,7 +846,8 @@ def fetch_direct_s3(var_key: str, experiment: str,
 
 def fetch_climakitae(var_key: str, scenario: str,
                      time_slice: tuple, lat_bounds: tuple,
-                     lon_bounds: tuple) -> xr.DataArray:
+                     lon_bounds: tuple,
+                     timescale: str = "monthly") -> xr.DataArray:
     """Fetch climate data via climakitae's get_data().
 
     WARNING: NOT thread-safe! Call sequentially only.
@@ -716,6 +858,7 @@ def fetch_climakitae(var_key: str, scenario: str,
         time_slice: (start_year, end_year)
         lat_bounds: (south, north)
         lon_bounds: (west, east)
+        timescale: "monthly", "daily", "hourly", or "yearly" (default "monthly")
 
     Returns:
         Lazy DataArray
@@ -724,11 +867,20 @@ def fetch_climakitae(var_key: str, scenario: str,
 
     var_name = VARIABLE_MAP[var_key]["ck_name"]
 
+    # Map our timescale names to climakitae's expected values
+    ck_timescale_map = {
+        "monthly": "monthly",
+        "daily": "daily",
+        "hourly": "hourly",
+        "yearly": "yearly",
+    }
+    ck_timescale = ck_timescale_map.get(timescale, timescale)
+
     da = get_data(
         variable=var_name,
         resolution="3 km",
         downscaling_method="Statistical",
-        timescale="monthly",
+        timescale=ck_timescale,
         scenario=[scenario],
         time_slice=time_slice,
         latitude=lat_bounds,
@@ -872,6 +1024,7 @@ def get_climate_data(
     scenarios: list,
     boundary: gpd.GeoDataFrame,
     time_slice: tuple = DEFAULT_TIMESPAN,
+    timescale: str = "monthly",
     backend: str = "direct_s3",
     coiled_cluster=None,
     catalog: Optional[CatalogExplorer] = None,
@@ -885,6 +1038,10 @@ def get_climate_data(
         scenarios: List of friendly scenario names (e.g. ["Historical Climate", "SSP 2-4.5"])
         boundary: GeoDataFrame with study area boundary
         time_slice: (start_year, end_year)
+        timescale: Temporal resolution - "monthly", "daily", or "yearly" (default "monthly")
+            - "monthly": Monthly aggregates. Temperature = mean, Precip = sum.
+            - "daily": Daily values. ~30x more data than monthly.
+            - "yearly": Annual max only. Only T_Max available.
         backend: "direct_s3" | "climakitae" | "coiled"
         coiled_cluster: Required if backend="coiled" — a coiled.Cluster or dask Client
         catalog: Optional CatalogExplorer (created automatically if needed)
@@ -892,11 +1049,25 @@ def get_climate_data(
     Returns:
         dict keyed by (var_key, scenario) -> preprocessed xr.DataArray
         For "coiled" backend, values are pandas DataFrames (already processed)
+
+    Raises:
+        ValueError: If requested variables are not available at the given timescale.
+            For example, timescale="yearly" only supports T_Max.
     """
+    # Validate that requested variables exist at this timescale
+    validate_timescale_variables(variables, timescale)
+
     lat_bounds, lon_bounds = get_lat_lon_bounds(boundary)
 
     if catalog is None and backend in ("direct_s3", "coiled"):
-        catalog = CatalogExplorer()
+        catalog = CatalogExplorer(timescale=timescale)
+    elif catalog is not None and catalog.timescale != timescale:
+        # User passed a catalog but with different timescale - warn them
+        import warnings
+        warnings.warn(
+            f"Provided catalog has timescale={catalog.timescale!r} but "
+            f"timescale={timescale!r} was requested. Using catalog's timescale."
+        )
 
     results = {}
 
