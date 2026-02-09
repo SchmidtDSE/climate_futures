@@ -1047,8 +1047,13 @@ def get_climate_data(
         catalog: Optional CatalogExplorer (created automatically if needed)
 
     Returns:
-        dict keyed by (var_key, scenario) -> preprocessed xr.DataArray
-        For "coiled" backend, values are pandas DataFrames (already processed)
+        dict keyed by variable name -> DataFrame
+        For "coiled" backend: {variable: DataFrame} where each DataFrame has columns:
+            [time, simulation, scenario, timescale, <variable_name>]
+        All scenarios are concatenated into a single DataFrame per variable.
+        Example: data["T_Max"] returns a DataFrame with all requested scenarios.
+        The timescale column indicates "monthly", "daily", or "yearly".
+        For other backends: {variable: xr.DataArray} (preprocessed)
 
     Raises:
         ValueError: If requested variables are not available at the given timescale.
@@ -1114,10 +1119,21 @@ def get_climate_data(
         keys = list(delayed_tasks.keys())
         computed = dask.compute(*[delayed_tasks[k] for k in keys])
 
+        # Collect DataFrames by variable, concatenating scenarios together
+        var_dfs = {var_key: [] for var_key in variables}
         for key, df in zip(keys, computed):
+            var_key, scenario = key
             # Strip timing metadata columns
             timing_cols = [c for c in df.columns if c.startswith("_")]
-            results[key] = df.drop(columns=timing_cols, errors="ignore")
+            df = df.drop(columns=timing_cols, errors="ignore")
+            # Add scenario and timescale columns so DataFrame is self-describing
+            df["scenario"] = scenario
+            df["timescale"] = timescale
+            var_dfs[var_key].append(df)
+
+        # Concatenate all scenarios for each variable into one DataFrame
+        for var_key in variables:
+            results[var_key] = pd.concat(var_dfs[var_key], ignore_index=True)
 
     else:
         raise ValueError(f"Unknown backend: {backend!r}")
