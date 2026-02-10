@@ -20,9 +20,12 @@ dependencies:
   - scipy
   - xarray
   - dask
+  - distributed
   - dask-geopandas
   - matplotlib
   - statsmodels
+  # Coiled (cloud compute)
+  - coiled
   # Climate-specific
   - xclim>0.56.0
   # Data I/O
