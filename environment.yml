@@ -19,7 +19,7 @@ dependencies:
   - shapely
   - pyogrio
   - cartopy  # NEW: Required for mapping and visualization
-  
+
   # Visualization
   - matplotlib
   - bokeh
