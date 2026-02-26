@@ -28,6 +28,7 @@ dependencies:
   - bqplot
   - ipydatagrid
   - pyside6
+  - plotnine
   
   # Distributed computing
   - dask
