@@ -1,4 +1,4 @@
-name: climate_data_pipeline
+name: climate_futures
 channels:
   - conda-forge
 dependencies:
@@ -63,6 +63,7 @@ dependencies:
   - jupyterlab
   - jupyter_client
   - ipython
+  - pip
   
   # Utilities
   - pydantic

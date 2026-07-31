@@ -1,4 +1,4 @@
-{
+ {
     "build": {
         "dockerfile": "Dockerfile",
         "context": "..",
