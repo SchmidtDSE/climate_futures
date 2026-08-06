@@ -1,10 +1,7 @@
  {
     "build": {
         "dockerfile": "Dockerfile",
-        "context": "..",
-        "options": [
-            "--platform=linux/amd64"
-        ]
+        "context": ".."
     },
     "features": {
         "ghcr.io/devcontainers/features/github-cli:1": {},
