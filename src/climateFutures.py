@@ -14,6 +14,7 @@ from plotnine import (ggplot, aes, geom_point, geom_vline, geom_hline,
                       scale_shape_manual, labs, theme_bw, theme)
 
 from src import dataLoader
+from src import config
 
 class ClimateFutures:
     ''' This class contains all the functions to create climate future datasets'''
@@ -37,6 +38,68 @@ class ClimateFutures:
         anomaly = nc - baseline
 
         return(anomaly)
+
+
+    def mid_century_anomalies(self, scenario, baseline_period, model, variable, boundary):
+        anomaly = self.calculate_anomaly(scenario, baseline_period, model, variable, boundary)
+        mid_century_anomaly = anomaly.sel(time=slice("2035", "2065")).mean("time")
+
+        return(mid_century_anomaly)
+    
+
+    def classify(self):
+            all_data = []
+            skipped = []
+            for model in self.models:
+                for scenario in self.scenarios:
+                    if scenario == 'historical':
+                        continue
+                    try:
+                        anomaly_tas = self.mid_century_anomalies(scenario, self.baseline_period, model, 'tas', self.boundary)
+                        anomaly_pr = self.mid_century_anomalies(scenario, self.baseline_period, model, 'pr', self.boundary)
+                    except FileNotFoundError:
+                        skipped.append((model, scenario))
+                        continue
+                    data = {
+                        'model': model,
+                        'scenario': scenario,
+                        'park': self.park,
+                        'tas': anomaly_tas.item(),
+                        'pr': anomaly_pr.item()
+                    }
+                    all_data.append(data)
+    
+            if skipped:
+                print(f"Skipped {len(skipped)} missing model/scenario combinations: {skipped}")
+    
+            df = pd.DataFrame(all_data)
+    
+            quantiles = df[['tas', 'pr']].quantile([0.25, 0.5, 0.75])
+
+            quantiles.to_csv(f'{config.OUTPUT}/climate_futures_quantiles_{self.park}.csv', index=True)
+    
+            conditions = [
+                # warm-dry
+                ((df['tas'] < quantiles.loc[0.25, 'tas']) & (df['pr'] < quantiles.loc[0.50, 'pr'])) |
+                ((df['tas'] < quantiles.loc[0.50, 'tas']) & (df['pr'] < quantiles.loc[0.25, 'pr'])),
+                # warm-wet
+                ((df['tas'] < quantiles.loc[0.25, 'tas']) & (df['pr'] > quantiles.loc[0.50, 'pr'])) |
+                ((df['tas'] < quantiles.loc[0.50, 'tas']) & (df['pr'] > quantiles.loc[0.75, 'pr'])),
+                # hot-dry
+                ((df['tas'] > quantiles.loc[0.75, 'tas']) & (df['pr'] < quantiles.loc[0.50, 'pr'])) |
+                ((df['tas'] > quantiles.loc[0.50, 'tas']) & (df['pr'] < quantiles.loc[0.25, 'pr'])),
+                # hot-wet
+                ((df['tas'] > quantiles.loc[0.75, 'tas']) & (df['pr'] > quantiles.loc[0.50, 'pr'])) |
+                ((df['tas'] > quantiles.loc[0.50, 'tas']) & (df['pr'] > quantiles.loc[0.75, 'pr']))
+            ]
+    
+            future = ['warm-dry', 'warm-wet', 'hot-dry', 'hot-wet']
+    
+            df['climate_future'] = np.select(conditions, future, default='central')
+    
+            return df
+
+    ### Old plotting functions, can be used for diagnostics but not actively maintained
 
     def plot_timeseries(self, ax, scenario, model, baseline_period, boundary, variable, color=None):
         ''' Plot a single smoothed anomaly timeseries. color overrides the default scenario color. '''
@@ -126,61 +189,6 @@ class ClimateFutures:
         self.plot_ensemble(variable, color_map=color_map, include=included,
                            xlim=('1990', None), shaded_period=('2035', '2065'))
 
-    def mid_century_anomalies(self, scenario, baseline_period, model, variable, boundary):
-        anomaly = self.calculate_anomaly(scenario, baseline_period, model, variable, boundary)
-        mid_century_anomaly = anomaly.sel(time=slice("2035", "2065")).mean("time")
-
-        return(mid_century_anomaly)
-
-    def classify(self):
-        all_data = []
-        skipped = []
-        for model in self.models:
-            for scenario in self.scenarios:
-                if scenario == 'historical':
-                    continue
-                try:
-                    anomaly_tas = self.mid_century_anomalies(scenario, self.baseline_period, model, 'tas', self.boundary)
-                    anomaly_pr = self.mid_century_anomalies(scenario, self.baseline_period, model, 'pr', self.boundary)
-                except FileNotFoundError:
-                    skipped.append((model, scenario))
-                    continue
-                data = {
-                    'model': model,
-                    'scenario': scenario,
-                    'park': self.park,
-                    'tas': anomaly_tas.item(),
-                    'pr': anomaly_pr.item()
-                }
-                all_data.append(data)
-
-        if skipped:
-            print(f"Skipped {len(skipped)} missing model/scenario combinations: {skipped}")
-
-        df = pd.DataFrame(all_data)
-
-        quantiles = df[['tas', 'pr']].quantile([0.25, 0.5, 0.75])
-
-        conditions = [
-            # warm-dry
-            ((df['tas'] < quantiles.loc[0.25, 'tas']) & (df['pr'] < quantiles.loc[0.50, 'pr'])) |
-            ((df['tas'] < quantiles.loc[0.50, 'tas']) & (df['pr'] < quantiles.loc[0.25, 'pr'])),
-            # warm-wet
-            ((df['tas'] < quantiles.loc[0.25, 'tas']) & (df['pr'] > quantiles.loc[0.50, 'pr'])) |
-            ((df['tas'] < quantiles.loc[0.50, 'tas']) & (df['pr'] > quantiles.loc[0.75, 'pr'])),
-            # hot-dry
-            ((df['tas'] > quantiles.loc[0.75, 'tas']) & (df['pr'] < quantiles.loc[0.50, 'pr'])) |
-            ((df['tas'] > quantiles.loc[0.50, 'tas']) & (df['pr'] < quantiles.loc[0.25, 'pr'])),
-            # hot-wet
-            ((df['tas'] > quantiles.loc[0.75, 'tas']) & (df['pr'] > quantiles.loc[0.50, 'pr'])) |
-            ((df['tas'] > quantiles.loc[0.50, 'tas']) & (df['pr'] > quantiles.loc[0.75, 'pr']))
-        ]
-
-        future = ['warm-dry', 'warm-wet', 'hot-dry', 'hot-wet']
-
-        df['climate_future'] = np.select(conditions, future, default='central')
-
-        return df
 
     def plot_quadrants(self):
         ''' Plots a climate futures quadrant scatter plot using plotnine.
