@@ -105,32 +105,32 @@ class ClimateFutures:
         print(self)
         
         df = self.classify()
-        #Filter for the climate futures we want.
+
+        print(f"Classified {len(df)} model/scenario combinations")
+
         df = df[df['climate_future'].isin(futures)] if futures is not None else df
-    
+        print(f"Creating ensemble for {len(df)} model/scenario combinations ({len(df['model'].unique())} models, {len(df['scenario'].unique())} scenarios)")
         all_data = []
 
         # getting historic data for all models and attach attributes
         for model in df['model'].unique():
             nc_hist = self.load_fn("historical", model, variable, self.boundary, self.park)
-            all_data.append(nc_hist.expand_dims('member').assign_coords(
-                model=('member', [model]),
-                scenario=('member', ['historical']),
-                climate_future=('member', ['historical']),
+            all_data.append(nc_hist.expand_dims(model=('member', [model]),
+                                                scenario=('member', ['historical'])))
+        # getting data for all model/scenario comibinations that actually exist  and attach attributes
+        for row in df[df['model'] == model].itertuples():
+            nc = self.load_fn(row.scenario, row.model, variable, self.boundary, self.park)
+            all_data.append(nc.expand_dims(
+                model=('member', [row.model]),
+                scenario=('member', [row.scenario]),
+                climate_future=('member', [row.climate_future]),
             ))
 
-            # getting data for all model/scenario comibinations that actually exist  and attach attributes
-            for row in df[df['model'] == model].itertuples():
-                nc = self.load_fn(row.scenario, row.model, variable, self.boundary, self.park)
-                all_data.append(nc.expand_dims('member').assign_coords(
-                    model=('member', [row.model]),
-                    scenario=('member', [row.scenario]),
-                    climate_future=('member', [row.climate_future]),
-                ))
-                print(f"Added {row.model} {row.scenario} ({row.climate_future}) to ensemble")
+            print('runs')
 
-        ensemble = xr.concat(all_data, dim='member')   
-        ensemble.to_dataframe().to_csv(f'{config.OUTPUT}/ensemble_{variable}_{self.park}.csv', index=False) 
+        ensemble = xr.concat(all_data, dim='member')    
+
+        print(ensemble.head())
 
         return ensemble
 
@@ -344,4 +344,10 @@ class ClimateFutures:
             style = fill_labels[min(i, len(fill_labels) - 1)]
             fc = 'gray' if i == 0 else 'white'
             legend_handles.append(Line2D([0], [0], marker='o', color='w',
-                                         markerfacecolor=fc, markeredgecolor='gray', markersize=8))
+                                         markerfacecolor=fc, markeredgecolor='k',
+                                         markersize=8, label=f'  {scenario} ({style})'))
+
+        ax.legend(handles=legend_handles, loc='upper left', bbox_to_anchor=(1.02, 1),
+                  fontsize=9, framealpha=1)
+
+        return fig
