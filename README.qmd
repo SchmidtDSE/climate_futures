@@ -1,56 +1,80 @@
 ---
-title: "Visualize"
 format: gfm
 editor: visual
+execute:
+  echo: true
+  warning: false
+  message: false
+fig-width: 8
+fig-height: 5
 ---
 
 # Climate Futures classification
 
-This notebook executes methods to classify a climate scenario data ensemble into the National Park Service's *Climate Futures* framework. The Climate Futures framework is a storyline approach for climate scenario planning under uncertainty. In reclassifies a CMIP ensemble of climate models/ scenario combinations into new scenario, based on their actual climate inpact at a certain location.
+This notebook executes methods to classify a climate scenario data ensemble into the National Park Service's *Climate Futures* framework. The Climate Futures framework is a storyline approach for climate scenario planning under uncertainty. It reclassifies a CMIP ensemble of climate models/scenario combinations into new scenarios, based on their actual climate impact at a certain location.
 
 ```{r}
+#| label: setup
+#| output: false
 source('visualize.R')
-
-plot_climate_futures('jotr')
-plot_climate_futures_ensemble(park = c('jotr'))
 ```
 
-├── `src` 📁 contain all the functions needed to create the data:
+```{r}
+#| label: overview-jotr
+plot_climate_futures('jotr')
+```
 
--   `configs.py` 📄 defined global variables
+```{r}
+#| label: ensemble-jotr
+plot_climate_futures_ensemble(parks = c('jotr'))
+```
 
--   `dataLoader.py` 📄 is a class with methods to load various data sets. So far ISIMIP 3b, and CalAdapt (CMIP6 downscaled with LOCA2-hyrbrid) have been implemented. If you are interested in using a different data source, you will need to add a method to the `dataLoader()` class
+-   `src` 📁 contains all the functions needed to create the data:
 
--   `climateFutures.py` 📄 contains all the functions needed to classify scenarios and save output. If your `dataLoader()` method is written correctly, it should be able to work with any newly added dataset.
+    -   `config.py` 📄 defines global variables
 
-├── `outputs` 📁 contains classified output files
+    -   `dataLoader.py` 📄 is a class with methods to load various data sets. So far ISIMIP 3b, and CalAdapt (CMIP6 downscaled with LOCA2-hybrid) have been implemented. If you are interested in using a different data source, you will need to add a method to the `dataLoader()` class
 
-├── `visualize.R` 📄 defines all functions needed for the plots.
+    -   `climateFutures.py` 📄 contains all the functions needed to classify scenarios and save output. If your `dataLoader()` method is written correctly, it should be able to work with any newly added dataset.
+
+-   `outputs` 📁 contains classified output files
+
+-   `visualize.R` 📄 defines all functions needed for the plots.
 
 ## Additional Plots
 
 To check which model/scenario combination got classified into which climate future run
 
 ```{r}
+#| label: model-overview
 plot_model_overview(park = 'jotr')
 ```
 
 To understand, if two national parks differ in their classification run
 
 ```{r}
+#| label: two-parks
 combine_two_parks(parks = c('jotr', 'deva'))
 ```
 
 To plot time series for multiple parks, run
 
 ```{r}
-plot_climate_futures_ensemble(park = c('jotr', 'deva'))
+#| label: ensemble-two-parks
+#| fig-height: 7
+plot_climate_futures_ensemble(parks = c('jotr', 'deva'))
 ```
 
 ------------------------------------------------------------------------
 
-This current version assumed that input climate data lives local - To download Caladapt, use `intake_caladapt.ipynb`. - To download ISIMIP 3b, use see the `isimip` folder
+This current version assumes that input climate data lives local:
 
-Note that our classification orientates itself from the original *Climate Futures* methodology, but does not completely reproduce it. Important differences: - Orignal CF uses MACA-downscaled CMIP5, we use LOCA2-downscaled CMIP6 for our main applications - Orignal CF uses observations as the baseline for anomaly calculations, we use historical simulations of the model of questions
+-   To download CalAdapt, use `intake_caladapt.ipynb`
+-   To download ISIMIP 3b, see the `isimip` folder
 
-More information on the original *Climate Futures* methodology can be found here: https://www.nps.gov/subjects/climatechange/climatefutures.htm
+Note that our classification orientates itself from the original *Climate Futures* methodology, but does not completely reproduce it. Important differences:
+
+-   Original CF uses MACA-downscaled CMIP5, we use LOCA2-downscaled CMIP6 for our main applications
+-   Original CF uses observations as the baseline for anomaly calculations, we use historical simulations of the model of questions
+
+More information on the original *Climate Futures* methodology can be found [here](https://www.nps.gov/subjects/climatechange/climatefutures.htm).
