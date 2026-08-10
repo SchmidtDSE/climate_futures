@@ -99,7 +99,7 @@ class ClimateFutures:
     
             return df
 
-    def create_ensemble(self, variable, futures=None):
+    def create_ensemble(self, variable, futures=['warm-dry', 'warm-wet', 'hot-dry', 'hot-wet']):
         ''' Based on classification, creaste aggregateddata over the study area to plot 
         time seriesensemble of climate futures'''
         print(self)
@@ -129,8 +129,11 @@ class ClimateFutures:
                 ))
                 print(f"Added {row.model} {row.scenario} ({row.climate_future}) to ensemble")
 
-        ensemble = xr.concat(all_data, dim='member')   
-        ensemble.to_dataframe().to_csv(f'{config.OUTPUT}/ensemble_{variable}_{self.park}.csv', index=False) 
+        ensemble = xr.concat(all_data, dim='member')
+
+        result = ensemble.to_dataframe().reset_index()
+        result = result.drop(columns=['spatial_ref', 'member'])
+        result.to_csv(f'{config.OUTPUT}/ensemble_{variable}_{self.park}.csv', index=False)
 
         return ensemble
 
