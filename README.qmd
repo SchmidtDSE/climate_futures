@@ -5,8 +5,8 @@ execute:
   echo: true
   warning: false
   message: false
-fig-width: 7
-fig-height: 4
+fig-width: 6
+fig-height: 3.5
 fig-dpi: 300
 knitr:
   opts_chunk:
