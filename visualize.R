@@ -62,9 +62,9 @@ add_reference_box = function(park, linetype, color, linewidth) {
     geom_rect(data = climate_futures_quantiles_park[climate_futures_quantiles_park$quantile %in% c(0.25, 0.75),], 
               aes(xmin = min(tas), xmax = max(tas), ymin = min(pr), ymax = max(pr)), 
               fill = 'white', alpha = .25, color = color, linewidth = linewidth, linetype = linetype),
-    scale_x_continuous(name = 'Temperature (°C)', 
+    scale_x_continuous(name = 'Temperature Anomaly (K)', 
                          breaks = round(climate_futures_quantiles_park[climate_futures_quantiles_park$quantile %in% c(0.25, 0.75),]$tas, 2)),
-      scale_y_continuous(name = 'Precipitation (mm)', 
+      scale_y_continuous(name = 'Precipitation Anomaly (mm)', 
                          breaks = round(climate_futures_quantiles_park[climate_futures_quantiles_park$quantile %in% c(0.25, 0.75),]$pr, 2)))
 }
 
@@ -148,7 +148,8 @@ combine_two_parks = function(parks = c('jotr', 'deva'), shapes = c(21, 1), sizes
 
 load_timeseries = function(park, variable) {
   df = read_csv(paste0("outputs/ensemble_", variable, "_", park, ".csv")) %>%
-    mutate(year = year(time)) %>%
+    mutate(year = year(time),
+           across(any_of('pr'), ~ .x * 86400)) %>%
     group_by(year, scenario, model, climate_future) %>%
     summarize(across(any_of("tas"), mean, .names = "value"),
               across(any_of("pr"),  sum,  .names = "value"),
