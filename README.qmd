@@ -7,6 +7,10 @@ execute:
   message: false
 fig-width: 8
 fig-height: 5
+fig-dpi: 200
+knitr:
+  opts_chunk:
+    dev: ragg_png
 ---
 
 # Climate Futures classification

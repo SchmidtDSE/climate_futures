@@ -6,8 +6,10 @@ This notebook executes methods to classify a climate scenario data
 ensemble into the National Park Service’s *Climate Futures* framework.
 The Climate Futures framework is a storyline approach for climate
 scenario planning under uncertainty. It reclassifies a CMIP ensemble of
-climate models/scenario combinations into new scenarios, based on their
-actual climate impact at a certain location.
+climate models/scenario combinations into new scenarios, aimed at
+enhancing the actual climate change signal at a certain location.
+
+Lets look at an example from Joshua Tree National Park:
 
 ``` r
 source('visualize.R')
