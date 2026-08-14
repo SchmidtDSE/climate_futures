@@ -347,4 +347,10 @@ class ClimateFutures:
             style = fill_labels[min(i, len(fill_labels) - 1)]
             fc = 'gray' if i == 0 else 'white'
             legend_handles.append(Line2D([0], [0], marker='o', color='w',
-                                         markerfacecolor=fc, markeredgecolor='gray', markersize=8))
+                                         markerfacecolor=fc, markeredgecolor='k',
+                                         markersize=8, label=f'  {scenario} ({style})'))
+
+        ax.legend(handles=legend_handles, loc='upper left', bbox_to_anchor=(1.02, 1),
+                  fontsize=9, framealpha=1)
+
+        return fig
